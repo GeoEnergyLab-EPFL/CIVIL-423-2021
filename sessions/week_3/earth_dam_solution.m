@@ -27,8 +27,9 @@ edge = [ edge ; 4  1 ];
 % Call mesh-generator MESH2D
 opts.kind = 'delfront';
 
-h_x = 2; %% Max elt area -> control the refinement of the mesh here
-[mesh.nodes,mesh.edge, mesh.connectivity,mesh.id] = refine2(node,edge,[],opts,h_x) ;
+h_x = 1.; %% Max elt area -> control the refinement of the mesh here
+[mesh.nodes,mesh.edge, mesh.connectivity,mesh.id] = ...
+    refine2(node,edge,[],opts,h_x) ;
 
 % plotting mesh
 figure(1);
@@ -41,7 +42,7 @@ ne_t=length(mesh.connectivity(:,1));
 % bottom edge :: y=0 x
 % top edge  :: y=hd x
 
-% find the nodes belonging to each boundaries
+% find the nodes belonging to each boundary
 left_edge=find(abs(mesh.nodes(:,1)/m-mesh.nodes(:,2))<0.001);
 right_edge=find(abs((x_ext-mesh.nodes(:,1))/m1-mesh.nodes(:,2))<0.001);
 bottom_edge=find(mesh.nodes(:,2)==0);
@@ -54,7 +55,6 @@ left_edge_unsat=left_edge(il);
 % Nodes on the left side below the water level (saturated; hydrostatic)
 [il]=find(mesh.nodes(left_edge,2)<hw);
 left_edge_sat=left_edge(il);
-
 
 % We now combine all nodes where we are either sure or do no know yet if
 % they are unsaturated. This is the combination of the nodes above water
@@ -74,26 +74,27 @@ hold on
  
 % Nodes on the left side above the water level (unsaturated;b.c. zero flow)
 % left unsaturated -> p=0 -> h=y (we are sure this is unsaturated)
-h_left_unsat=------
+h_left_unsat=mesh.nodes(left_edge_unsat,2);
 
 % Nodes on the left/upstream side below the water level (saturated; 
 % hydrostatic)
 % hydrostatic -> p=gamma_w (hw-y) -> h= (hw-y) + y == hw
-h_left_sat=---------
+h_left_sat=hw*ones(length(left_edge_sat),1);
 
 % Now the Dirichlet boundary condition at the downstream face (right side)
 % right p = 0-> h=y (we estimate zero pressure everywhere there)
-h_right=----------
+h_right=mesh.nodes(right_edge,2);
 
 % And now the boundary condition at the crest of the dam (top)
 % top -> p=0 -> h=y (we are sure this is unsaturated)
-h_top=-------------
+h_top=mesh.nodes(top_edge,2);
 
 % Combining all b.c. on unsaturated parts
 h_all_unsat=[h_left_unsat;h_top;h_right];
 h_unsat=h_all_unsat(ia_unsat);  % we use here ia_unsat to re-order properly
                                 % such that we have correspondance between
                                 % nodes_unsat and h_unsat
+
 
 % Deleting duplication of fixed nodes (just in case).
 [nodes_fixed, ia, ic]=unique([left_edge_sat; ]) ;
@@ -117,14 +118,14 @@ gammaw=10; % Weight of the water
 beta_fix=0.9; % Under relaxation coefficient (1 if none)
 eps_perm=0.01; % Parameter that controls sharpness of relative permeability
                % function
-tolerance = 1.e-6; % Tolerance for iteration
+tolerance = 2.e-5; % Tolerance for iteration
 err=1; % Initialization of error
 iter_max=20; % Max. number of iterations
 k=0; % Iteration count
 
 while (k<iter_max) && (err>tolerance)
     k=k+1;
-     % start the under-relaxation after first iteration only as the firt
+     % start the under-relaxation after first iteration only as the first
      % iterate is to get an full initial guess
     if k==1
         beta=1;
@@ -136,15 +137,15 @@ while (k<iter_max) && (err>tolerance)
     [C] = AssembleConductivityMatrix(mesh,k_current,'2D');
     
     % First, we have to separate the nodes where the piezometric head is
-    % unknown from nodes where the piezometric head is fixed (because of the
-    % boundary conditions).    
+    % unknown from nodes where the piezometric head is fixed (because of 
+    % the boundary conditions).   
     eq_to_solve=setdiff([1:length(mesh.nodes)],nodes_fixed)';
         
     % Compute the force vector
-    f = ----------
+    f = -C(eq_to_solve,nodes_fixed)*h_set ;
     
     % Compute the unknown piezometric heads at each step
-    h_aux = ------------
+    h_aux = C(eq_to_solve,eq_to_solve)\f;
     
     % Solution of the previous step
     h_res_1=h_res;
@@ -157,9 +158,9 @@ while (k<iter_max) && (err>tolerance)
                                % heads
     
     % Under-Relax the solution of the current step
-    h_res=-----------------
+    h_res=(1-beta)*h_res_1+beta*h_res;
+    
     % Compute pressure from head
-    gammaw=10;
     p_res = gammaw*(h_res - mesh.nodes(:,2));
     
     % check constraints on pressure on the unsaturated boundary
@@ -168,24 +169,24 @@ while (k<iter_max) && (err>tolerance)
     % (which should thus be below the y coordinate)
     % set of nodes on the unsat boundary where pressure is >0 
     % will need to be fixed to p=0
-    ic = -----------
+    ic = find(h_res(nodes_unsat)>mesh.nodes(nodes_unsat,2)); 
     
-    % check  flux are < 0 on seeping part of the unsat boundary 
+    % check if the flux are < 0 on seeping part of the unsat boundary 
     ff=C*h_res; 
-    % get set of nodes where p> 0 and qn <0
-    if_o = -----------------
+    % get set of nodes where p > 0 and qn <0
+    if_o = find(ff(nodes_unsat(ic))<0);
     i_fix_u=ic(if_o); % These are the indices of the nodes with a pressure
                       % above zero and a flux.
                       % We will fix there the pressure to be zero.
     
-    % We adapt the fixed nodes by adding the ones just found. 
+    % We adapt the fixed nodes by adding the ones just found.                  
     nodes_fixed=[left_edge_sat; nodes_unsat(i_fix_u)];
     
     % We fix the hydraulic heads at the locations of the previously found 
     % points.
     h_set=[h_left_sat;h_unsat(i_fix_u)];
 
-    % Compute new the relative permeability of each element
+    % Compute the new relative permeability of each element
     [k_current,pm]=ComputeRelPerm(mesh,p_res,eps_perm);
     
     % We check if we got a valid new permeability.
@@ -194,11 +195,11 @@ while (k<iter_max) && (err>tolerance)
         disp('error - Nan Perm');
     end
     
-    
     % Compute the error of the current step by comparing the solution of 
     % the hydraulic head to the one of the previous step.
-    err=median(abs(h_res-h_res_1)./h_res);    
-    disp(['max relative change at its ', num2str(k), ' is : ',num2str(err)]);
+    err=median(abs(h_res-h_res_1)./h_res);   
+    disp(['median of relative change at iteration ', num2str(k),...
+        ' is : ', num2str(err)]);
     
 end
 
