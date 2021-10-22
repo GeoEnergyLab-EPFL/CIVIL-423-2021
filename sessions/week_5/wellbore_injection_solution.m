@@ -17,34 +17,36 @@ rw = +1.; % wellbore radius
 Nw = 25; % number of faces of the polygon approximating the circle
 arc_w = 2.*pi/Nw; % angle related to each polygon face
 
-xcir_w = ---------; % x coordinate of each node
-ycir_w = ---------; % y coordinate of each node
+xcir_w = rw * cos(0:arc_w:2*pi - arc_w)'; % x coordinate of each node
+ycir_w = rw * sin(0:arc_w:2*pi - arc_w)'; % y coordinate of each node
 node_w = [xcir_w,ycir_w]; % matrix with (x,y) coordinates of nodes         
 
 % edges of each polygon face
 edge_w = zeros(Nw,2);
-edge_w(:,1) = -----; 
-edge_w(:,2) = -----; 
+edge_w(:,1) = [1:1:Nw]'; 
+edge_w(:,2) = [2:1:Nw,1]';
 
 % Outer circle - Reservoir boundary 
 % Here you have to define the outer boundary of the mesh 
 
+rw = 1;     % wellbore radius
 R = rw*30;  % reservoir radius
 Nr = 25;    % number of faces of the polygon approximating the circle
 arc_r = 2.*pi/Nr; % angle related to each polygon face
 
-xcir_r = ----------; % x coordinate of each node
-ycir_r = ----------; % y coordinate of each node
+xcir_r = R * cos(0:arc_r:2*pi - arc_r)'; % x coordinate of each node
+ycir_r = R * sin(0:arc_r:2*pi - arc_r)'; % y coordinate of each node
 node_r = [xcir_r,ycir_r]; % matrix with (x,y) coordinates of nodes     
 
 % edges of each polygon face
 edge_r = zeros(Nr,2);
-edge_r(:,1) = ------; 
-edge_r(:,2) = ------; 
+edge_r(:,1) = [1:1:Nr]'; 
+edge_r(:,2) = [2:1:Nr,1]';
+edge_r = edge_w+size(node_w,1);
 
 % Finally, we put together all the boundaries of the domain
-node = [node_r; node_w];
-edge = [edge_r; edge_w];
+node = [node_w; node_r];
+edge = [edge_w; edge_r];
 
 % call mesh-generator MESH2D
 opts.kind = 'delfront';
@@ -74,7 +76,7 @@ patch('faces',edge(:,1:2),'vertices',node, ...
 % HINT: you do not need to perform integration since the specific discharge
 % is contant along the perimeter of the wellbore.
 
-% First, we find the nodes along the perimeter of the wellbore
+% First, find the nodes along the perimeter of the wellbore
 well_edge = find(abs(mesh.nodes(:,1).^2+mesh.nodes(:,2).^2 - rw^2) ...
     < .0001);
 
@@ -87,11 +89,10 @@ Q = 1; % wellbore injection rate [m3/s]
 q = Q/(2*pi*rw); % specific discharge [m/s] (per unit thickness)
 
 n_nodes = length(mesh.nodes); % number of nodes
-
-% Now you have to compute the force vector
 f_q = zeros(n_nodes,1); % initialization of force vector
 
-f_q(well_edge) = --------;
+f_q(well_edge) = q*(2*pi*rw)/Nw; % same amount of lumped flux at each node
+
 %% Finite element solution + Theta-method
 
 % Conductivity matrix
@@ -123,20 +124,21 @@ Id =speye(n_nodes,n_nodes); % Identity matrix necessary to solve by theta-method
 j=0;
 while tn<tMax && j<=iter_max
     j=j+1;
-    % Here you have to solve the system of equations at each step
-    tn = -----; % Increase the time by delta t
-    dp = -----; % Compute the increment of pressure dp
-    po = -----; % Adding to the previous pressure
-    pressure = -----; % Store the results in the corresponding pressure
-                      % matrix
-    time = -----; % Store the time in the corresponding vector
+    tn=tn+time_step; % Increase the time by delta t
+    dp=(M+theta*time_step*C)\(f_q*time_step-C*po*time_step); % Compute the
+                                                             % increment of
+                                                             % pressure dp
+    po=po+dp; % Adding to the previous pressure
+    pressure(j+1,:)=po'; % Store the results in the corresponding pressure 
+                         % matrix
+    time(j+1)=tn; % Store the time in the corresponding vector
 end
 
 %% Graphs
 
 % Use this graph to see spatio-temporal evolution of the pressure
 figure(3)
-times2plot = 1:round(length(time)/10):length(time);
+times2plot = 1:round(length(time)/10/2):length(time)/2;
 for i = 1 : length(times2plot)
   trisurf(mesh.connectivity,mesh.nodes(:,1),mesh.nodes(:,2),pressure(times2plot(i),:));
   title( sprintf('t = %.5g', time(times2plot(i))));
@@ -148,11 +150,11 @@ hold off
 
 %% Comparison with analytical solution
 
-% We define the points to plot
+% Define points to plot
 points2plot = [0 rw; 0 R/2; 0 R]; % points to plot --> wellbore, middle of
 % domain, and reservoir boundary
 
-% We find the nearest node to the points2plot
+% Find the nearest node to the points2plot
 closest_node = zeros(length(points2plot),1);
 for i = 1:length(points2plot)
     distances = sqrt(sum((points2plot(i,:)-mesh.nodes)'.^2));
@@ -176,18 +178,49 @@ axis image off;
 % Now you have to compare the numerical and analytical solutions
 
 % Compute here the analytical solutions
+line_source = line_source_solution(mesh.nodes,time,Q,perm,S); % early-time 
+                                                              % line-source
+                                                              % solution
+cylindrical_source = ...
+    cylindrical_source_solution(mesh.nodes,time,Q,perm,S,rw,R); 
+    % steady-state cylindrical-source solution
 
-line_source = --------; % early-time line-source solution
-cylindrical_source = --------; % steady-state cylindrical-source solution
 
-% Create here the 3 graphs asked in the exercise and plot at each graph 
-% the numerical and both analytical solutions
+% Create here the 3 graphs requested and plot at each graph the numerical 
+% and both analytical solutions
 
 % First graph, at wellbore
+nn = 1;
 figure(5)
+title('Pressure versus time at the wellbore'); hold on;
+plot(time,pressure(:,closest_node(nn)),'.-k') ; hold on;
+plot(time,line_source(:,closest_node(nn)),'-r');hold on;
+plot(time,cylindrical_source(:,closest_node(nn)),'-b');
+xlabel(' time');
+ylabel('Pressure at wellbore');
+legend('Numerical','Early-time','Pseudo Steady-state','Location','southeast');
+xlim([0 tMax])
 
 % Second graph, at the reservoir boundary
+nn = 3;
 figure(6)
+title('Pressure versus time at the reservoir boundary'); hold on;
+plot(time,pressure(:,closest_node(nn)),'.-k') ; hold on;
+plot(time,line_source(:,closest_node(nn)),'-r');hold on;
+plot(time,cylindrical_source(:,closest_node(nn)),'-b');
+xlabel(' time');
+ylabel('Pressure at the reservoir boundary');
+legend('Numerical','Early-time','Pseudo Steady-state','Location','southeast');
+xlim([0 tMax])
 
-% Third graph, at the middle of wellbore and reservoir boundary
+% Third graph, at the middle of wellbore and reservoir boundary 
+nn = 2;
 figure(7)
+title('Pressure versus time at the middle'); hold on;
+plot(time,pressure(:,closest_node(nn)),'.-k') ; hold on;
+plot(time,line_source(:,closest_node(nn)),'-r');hold on;
+plot(time,cylindrical_source(:,closest_node(nn)),'-b');
+xlabel(' time');
+ylabel('Pressure at the middle');
+legend('Numerical','Early-time','Pseudo Steady-state','Location','southeast');
+xlim([0 tMax])
